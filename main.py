@@ -10,25 +10,6 @@ from matplotlib.ticker import FuncFormatter
 from sklearn.preprocessing import StandardScaler
 
 
-class RequestTransactions:
-    def __init__(self, session):
-        self.session = session
-        self.seconds_wait = 6
-
-    async def explorer(self, url):
-        async with self.session.get(url) as resp:
-            if resp.status == 200:
-                transaction_data = await resp.json()
-                if transaction_data:
-                    return transaction_data.get('data')
-                else:
-                    print(f'Transactional data from {url}: IS empty')
-                    return
-            else:
-                print(f'Could not retrieve transactional data from {url}')
-                await asyncio.sleep(self.seconds_wait)
-
-
 class Transactions:
 
     def __init__(self, transactions):
@@ -124,7 +105,8 @@ async def create_dataframe(data: Tuple[List[List]]) -> pd.DataFrame:
     for row in data:
         data = pd.DataFrame(row, columns=['source', 'destination', 'amount', 'timestamp'])
         data = data.sort_values(by=['timestamp', 'source'])
-        list_of_data.append(data)
+        if not data.empty:
+            list_of_data.append(data)
     data = pd.concat(list_of_data)
     data['timestamp'] = pd.to_datetime(data.timestamp, format='ISO8601')
     return data
@@ -168,39 +150,41 @@ async def handle_outliers(data, cutoff_transaction_count, cutoff_date) -> pd.Dat
     # Control timespan
     data = data[data['timestamp'] >= cutoff_date]
     # Exclude individual outliers
-    # data = data[~(data['source'] == 'DAG2AhT8r7JoQb8fJNEKFLNEkaRSxjNmZ6Bbnqmb')]
+    data = data[~(data['source'] == 'DAG2AhT8r7JoQb8fJNEKFLNEkaRSxjNmZ6Bbnqmb')]
     return data
 
 
-async def define_clusters(cutoff_transaction_count, cutoff_date):
+async def create_wallet_features(data: pd.DataFrame) -> pd.DataFrame.groupby:
     """
-    Categorize node wallet sell/transaction behavior
-    :param cutoff_transaction_count:
-    :param cutoff_date:
-    :return:
+    Self-explanatory
+    :param transactional data:
+    :return features for ML:
     """
-    pd.set_option('display.float_format', '{:.2f}'.format)
-    addresses = await get_addresses()
-    transactions = await request_transactions(addresses)
-    transactions = await create_dataframe(transactions)
-    transactions = await destination_specific_calculations(transactions)
-    transactions = await handle_outliers(transactions, cutoff_transaction_count, cutoff_date)
-
-    wallet_features = transactions.groupby('source').agg(
+    wallet_features = data.groupby('source').agg(
         total_amount_sent=pd.NamedAgg(column='amount', aggfunc='sum'),
         number_of_transactions=pd.NamedAgg(column='amount', aggfunc='count'),
         average_amount_sent=pd.NamedAgg(column='amount', aggfunc='mean'),
         # Low transaction frequency means infrequent engagement or usage
         transaction_frequency=pd.NamedAgg(column='timestamp', aggfunc=lambda x: x.diff().mean().total_seconds())
     ).dropna().reset_index()
+    return wallet_features
 
-    # Normalize values for ML
 
+async def scale_features(data) -> StandardScaler:
+    """
+    Normalize values for ML
+    :param wallet features:
+    :return scaled wallet features:
+    """
     scaler = StandardScaler()
-    wallet_features_scaled = scaler.fit_transform(wallet_features.drop(columns='source'))
-    print(wallet_features_scaled)
+    wallet_features_scaled = scaler.fit_transform(data.drop(columns='source'))
+    return wallet_features_scaled
 
-    # Determine optimal number of clusters
+
+def optimal_k(wallet_features_scaled):
+    """
+    Saves elbow plot to aid determine optimal number of clusters
+    """
     inertia = []
     K = range(1, 11)
     for k in K:
@@ -218,6 +202,24 @@ async def define_clusters(cutoff_transaction_count, cutoff_date):
     plt.xlabel('Number of Clusters')
     plt.ylabel('Elbow Method for Optimal k')
     plt.savefig(f'elbow_plot.png')  # Got four clusters
+
+
+async def define_clusters(cutoff_transaction_count, cutoff_date):
+    """
+    Categorize node wallet sell/transaction behavior
+    :param cutoff_transaction_count:
+    :param cutoff_date:
+    :return:
+    """
+    pd.set_option('display.float_format', '{:.2f}'.format)
+    addresses = await get_addresses()
+    transactions = await request_transactions(addresses)
+    transactions = await create_dataframe(transactions)
+    transactions = await destination_specific_calculations(transactions)
+    transactions = await handle_outliers(transactions, cutoff_transaction_count, cutoff_date)
+    wallet_features = await create_wallet_features(transactions)
+    wallet_features_scaled = await scale_features(wallet_features)
+    optimal_k(wallet_features_scaled)
 
     # Fit K-Means to number of clusters
     kmeans = KMeans(
@@ -244,17 +246,17 @@ async def define_clusters(cutoff_transaction_count, cutoff_date):
     # Visualization: Scatter plot of clusters
     plt.figure(figsize=(10, 6))
     sns.scatterplot(
-        x='transaction_frequency',
+        x='total_amount_sent',
         y='average_amount_sent',
         hue='cluster',
-        size='total_amount_sent',
+        size='transaction_frequency',
         palette='viridis',
         data=wallet_features,
         s=100,
         alpha=0.6
     )
     plt.title('Cluster Visualization Based on Total Tokens Sent and Average Transaction Value')
-    plt.xlabel('Transaction Freq')
+    plt.xlabel('Total Amount Sent')
     plt.ylabel('Average Amount Sent')
     # Applying custom formatter
     plt.gca().xaxis.set_major_formatter(FuncFormatter(currency_formatter))
