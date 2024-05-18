@@ -87,7 +87,7 @@ async def request_transactions(addresses) -> Tuple[List[List]]:
         return transactions
 
 
-async def create_dataframe(data: List) -> pd.DataFrame:
+async def create_dataframe(data: Tuple) -> pd.DataFrame:
     """
     Takes the bulk of data from a transaction object (list of lists) and returns a dataframe
     :param data:
@@ -128,7 +128,11 @@ async def destination_specific_calculations(data) -> pd.DataFrame:
 
 async def handle_outliers(data, cutoff_transaction_count, cutoff_date) -> pd.DataFrame:
     """
-    Handle radical outliers and clean
+    Clean data and handle radical outliers
+    :param data:
+    :param cutoff_transaction_count:
+    :param cutoff_date:
+    :return:
     """
     # Ignore non-frequent destinations
     data = data[data['count'] >= cutoff_transaction_count]
@@ -138,14 +142,20 @@ async def handle_outliers(data, cutoff_transaction_count, cutoff_date) -> pd.Dat
     data = data[~(data['source'] == 'DAG2AhT8r7JoQb8fJNEKFLNEkaRSxjNmZ6Bbnqmb')]
     return data
 
+
 async def define_clusters(cutoff_transaction_count, cutoff_date):
+    """
+    Categorize node wallet sell/transaction behavior
+    :param cutoff_transaction_count:
+    :param cutoff_date:
+    :return:
+    """
     pd.set_option('display.float_format', '{:.2f}'.format)
     addresses = await get_addresses()
     transactions = await request_transactions(addresses)
     transactions = await create_dataframe(transactions)
     transactions = await destination_specific_calculations(transactions)
-    transactions = await handle_outliers(transactions)
-
+    transactions = await handle_outliers(transactions, cutoff_transaction_count, cutoff_date)
 
     wallet_features = transactions.groupby('source').agg(
         total_amount_sent=pd.NamedAgg(column='amount', aggfunc='sum'),
