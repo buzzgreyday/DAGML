@@ -166,7 +166,9 @@ async def create_wallet_features(data: pd.DataFrame) -> pd.DataFrame.groupby:
         average_amount_sent=pd.NamedAgg(column='amount', aggfunc='mean'),
         # Low transaction frequency means infrequent engagement or usage
         transaction_frequency=pd.NamedAgg(column='timestamp', aggfunc=lambda x: x.diff().mean().total_seconds())
-    ).dropna().reset_index()
+    ).reset_index().copy()
+    # Check for any NaN values in transaction_frequency and fill them with a suitable value, e.g., the mean or median
+    wallet_features['transaction_frequency'].fillna(0)
     return wallet_features
 
 
@@ -221,25 +223,12 @@ async def fit_and_predict(wallet_features: pd.DataFrame, wallet_features_scaled:
     return wallet_features
 
 
-async def define_clusters(cutoff_transaction_count, cutoff_date):
+async def generate_cluster_analysis(wallet_features: pd.DataFrame) -> pd.DataFrame:
     """
-    Categorize node wallet sell/transaction behavior
-    :param cutoff_transaction_count:
-    :param cutoff_date:
+    Analyse what clusters represent
+    :param wallet_features:
     :return:
     """
-    pd.set_option('display.float_format', '{:.2f}'.format)
-    addresses = await get_addresses()
-    transactions = await request_transactions(addresses)
-    transactions = await create_dataframe(transactions)
-    transactions = await destination_specific_calculations(transactions)
-    transactions = await handle_outliers(transactions, cutoff_transaction_count, cutoff_date)
-    wallet_features = await create_wallet_features(transactions)
-    wallet_features_scaled = await scale_features(wallet_features)
-    optimal_k(wallet_features_scaled)
-    wallet_features = await fit_and_predict(wallet_features, wallet_features_scaled)
-
-    # Analyse what clusters represent
     cluster_analysis = wallet_features.groupby('cluster').agg(
         total_amount_sent=pd.NamedAgg(column='total_amount_sent', aggfunc='sum'),
         average_amount_sent=pd.NamedAgg(column='average_amount_sent', aggfunc='mean'),
@@ -247,8 +236,30 @@ async def define_clusters(cutoff_transaction_count, cutoff_date):
         transaction_frequency=pd.NamedAgg(column='transaction_frequency', aggfunc='mean')
     ).reset_index()
     print(cluster_analysis)
+    return cluster_analysis
 
-    # Custom formatter function to avoid scientific notation
+
+def visualize_clusters_barplot(cluster_analysis):
+    # Visualization: Bar plot of total tokens sent by cluster
+    plt.figure(figsize=(10, 6))
+    sns.barplot(
+        x='cluster',
+        y='average_amount_sent',
+        data=cluster_analysis,
+        legend=False
+    )
+    plt.title('Total amount Sent by Cluster')
+    plt.xlabel('Cluster')
+    plt.ylabel('Average Amount Sent')
+    plt.savefig('cluster_bar_plot.png')
+
+
+def visualize_clusters_scatterplot(wallet_features):
+    """
+    Visualize clusters in a scatterplot
+    :param wallet_features:
+    :return:
+    """
     def currency_formatter(x, pos):
         return '{:,.2f}'.format(x)
 
@@ -273,18 +284,29 @@ async def define_clusters(cutoff_transaction_count, cutoff_date):
     plt.legend(title='Cluster')
     plt.savefig('cluster_scatterplot.png')
 
-    # Visualization: Bar plot of total tokens sent by cluster
-    plt.figure(figsize=(10, 6))
-    sns.barplot(
-        x='cluster',
-        y='average_amount_sent',
-        data=cluster_analysis,
-        legend=False
-    )
-    plt.title('Total amount Sent by Cluster')
-    plt.xlabel('Cluster')
-    plt.ylabel('Average Amount Sent')
-    plt.savefig('cluster_bar_plot.png')
+
+
+async def define_clusters(cutoff_transaction_count, cutoff_date):
+    """
+    Categorize node wallet sell/transaction behavior
+    :param cutoff_transaction_count:
+    :param cutoff_date:
+    :return:
+    """
+    pd.set_option('display.float_format', '{:.2f}'.format)
+    addresses = await get_addresses()
+    transactions = await request_transactions(addresses)
+    transactions = await create_dataframe(transactions)
+    transactions = await destination_specific_calculations(transactions)
+    transactions = await handle_outliers(transactions, cutoff_transaction_count, cutoff_date)
+    wallet_features = await create_wallet_features(transactions)
+    wallet_features_scaled = await scale_features(wallet_features)
+    optimal_k(wallet_features_scaled)
+    wallet_features = await fit_and_predict(wallet_features, wallet_features_scaled)
+    cluster_analysis = await generate_cluster_analysis(wallet_features)
+    visualize_clusters_scatterplot(wallet_features)
+    visualize_clusters_barplot(cluster_analysis)
+
 
     # Step 8: Determine which wallets are in which clusters
     wallet_clusters = wallet_features[
