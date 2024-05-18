@@ -2,29 +2,12 @@ import asyncio
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
-from sklearn.model_selection import train_test_split
-from sklearn import preprocessing
-from sklearn.cluster import KMeans
 
+from sklearn.cluster import KMeans
 from aiohttp import ClientSession, TCPConnector
 from typing import List, Tuple
 from matplotlib.ticker import FuncFormatter
-
 from sklearn.preprocessing import StandardScaler
-
-
-# addresses = [
-#     "DAG3nt2qnhdeGS5ZxredSxqaZrn9KoL6xHZ3yTc5",
-#     "DAG4Ewq5dFeG2YyCzqCooG6gSn6js5YmzD9w3cn4",
-#     "DAG4GiYssahypSmykMp4ALwzQMZqNg35Sibx1TUJ",
-#     "DAG4KWAEjg7ARXgJKEghyrz5Y8c5Fm6iqMThYfPu",
-#     "DAG4LUKibZHggi4uhyT5CG1XHCU3EGSRXCVwxNvu",
-#     "DAG5aWVLVN8SkxSvJTjjCFA7VNRcduopLcRWL6X2",
-#     "DAG5byyjxGFJbKttkv14aMfmbUuAuKqSDx9sBGRV",
-#     "DAG5DpN4cLaZjSKhEJ4gmpib7mRKSGueQFxFM8VF",
-#     "DAG5PEPQj9AffZJZJTzLbEYWxgH2Yt82keoJXQY2",
-#     "DAG6ANcW9KFoehdvuezW7s2fbjpcwTL4JjYXk2Hb"
-# ]
 
 
 class RequestTransactions:
@@ -65,7 +48,7 @@ class Transactions:
         return results
 
 
-async def fetch_transactions(session, url) -> List:
+async def fetch_transaction(session, url) -> List:
     async with session.get(url) as response:
         if response.status == 200:
             transaction_data = await response.json()
@@ -84,7 +67,8 @@ async def fetch_addresses(session, url) -> List:
             print(f'Could not retrieve transactional data from {url}')
             return []
 
-async def request_addresses():
+
+async def get_addresses():
     async with ClientSession(connector=TCPConnector(ssl=False)) as session:
         task = fetch_addresses(session, f'https://dyzt5u1o3ld0z.cloudfront.net/mainnet/validator-nodes')
         data = await asyncio.gather(task)
@@ -94,18 +78,21 @@ async def request_addresses():
         return addresses
 
 
-
 async def request_transactions(addresses) -> Tuple[List[List]]:
     async with ClientSession(connector=TCPConnector(ssl=False)) as session:
         tasks = [
-            fetch_transactions(session, f'https://be-mainnet.constellationnetwork.io/addresses/{address}/transactions/sent')
+            fetch_transaction(session, f'https://be-mainnet.constellationnetwork.io/addresses/{address}/transactions/sent')
             for address in addresses]
         transactions = await asyncio.gather(*tasks)
         return transactions
 
 
-async def create_dataframe(data):
-    print(data)
+async def create_dataframe(data: List) -> pd.DataFrame:
+    """
+    Takes the bulk of data from a transaction object (list of lists) and returns a dataframe
+    :param data:
+    :return:
+    """
     list_of_data = []
     for row in data:
         data = pd.DataFrame(row, columns=['source', 'destination', 'amount', 'timestamp'])
@@ -116,37 +103,48 @@ async def create_dataframe(data):
     return data
 
 
-async def main():
-    """Initiate process"""
-    pd.set_option('display.float_format', '{:.2f}'.format)
-    # Specify the cutoff date
-    cutoff_date = pd.to_datetime('2022-05-17').tz_localize('UTC')
-    cutoff_min_transaction_count = 8
-    addresses = await request_addresses()
-    transactions = await request_transactions(addresses)
-    transactions = await create_dataframe(transactions)
-    transactions.loc[:, 'total_amount_sent_to_destination'] = (
-        transactions.groupby(['source', 'destination'])['amount'].transform('sum'))
+async def destination_specific_calculations(data) -> pd.DataFrame:
+    """
+    Calculate the sum sent to specific wallet addresses (destinations)
+    :param data:
+    :return:
+    """
+    data.loc[:, 'amount_sent_to_destination_sum'] = (
+        data.groupby(['source', 'destination'])['amount'].transform('sum'))
     # Group by 'source', 'destination', and 'total_amount_sent_to_destination', count occurrences, and sort by count
     # to get number of transactions to specific addresses
-    transaction_count_to_destination = transactions.groupby(
-        ['source', 'destination', 'total_amount_sent_to_destination']).size().reset_index(
+    count_transactions_to_destination = data.groupby(
+        ['source', 'destination', 'amount_sent_to_destination_sum']).size().reset_index(
         name='count'
-        ).sort_values(
+    ).sort_values(
         by='count'
     )
 
     # Merge the counts back to the original DataFrame
-    transactions = pd.merge(transactions, transaction_count_to_destination,
-                            on=['source', 'destination', 'total_amount_sent_to_destination'], how='left')
+    data = pd.merge(data, count_transactions_to_destination,
+                    on=['source', 'destination', 'total_amount_sent_to_destination'], how='left')
+    return data
 
-    """ Handle radical outliers and clean """
+
+async def handle_outliers(data, cutoff_transaction_count, cutoff_date) -> pd.DataFrame:
+    """
+    Handle radical outliers and clean
+    """
     # Ignore non-frequent destinations
-    transactions = transactions[transactions['count'] >= cutoff_min_transaction_count]
+    data = data[data['count'] >= cutoff_transaction_count]
     # Control timespan
-    transactions = transactions[transactions['timestamp'] >= cutoff_date]
-    # Remove individual outliers
-    transactions = transactions[~(transactions['source'] == 'DAG2AhT8r7JoQb8fJNEKFLNEkaRSxjNmZ6Bbnqmb')]
+    data = data[data['timestamp'] >= cutoff_date]
+    # Exclude individual outliers
+    data = data[~(data['source'] == 'DAG2AhT8r7JoQb8fJNEKFLNEkaRSxjNmZ6Bbnqmb')]
+    return data
+
+async def define_clusters(cutoff_transaction_count, cutoff_date):
+    pd.set_option('display.float_format', '{:.2f}'.format)
+    addresses = await get_addresses()
+    transactions = await request_transactions(addresses)
+    transactions = await create_dataframe(transactions)
+    transactions = await destination_specific_calculations(transactions)
+    transactions = await handle_outliers(transactions)
 
 
     wallet_features = transactions.groupby('source').agg(
@@ -180,7 +178,7 @@ async def main():
     plt.plot(K, inertia, 'bx-')
     plt.xlabel('Number of Clusters')
     plt.ylabel('Elbow Method for Optimal k')
-    plt.savefig(f'elbow_plot.png') # Got four clusters
+    plt.savefig(f'elbow_plot.png')  # Got four clusters
 
     # Fit K-Means to number of clusters
     kmeans = KMeans(
@@ -255,7 +253,16 @@ async def main():
         print(f"\nWallets in Cluster {cluster}:")
         print(wallet_clusters[wallet_clusters['cluster'] == cluster]['source'].values)
     print(wallet_clusters[(wallet_clusters.source == 'DAG3nt2qnhdeGS5ZxredSxqaZrn9KoL6xHZ3yTc5')])
+
+
+async def main():
+    """Initiate processes"""
+    # Specify the cutoff date
+    cutoff_date = pd.to_datetime('2022-05-17').tz_localize('UTC')
+    cutoff_transaction_count = 8
+    await define_clusters(cutoff_transaction_count, cutoff_date)
     exit(0)
+
 
 
 if __name__ == '__main__':
