@@ -172,10 +172,9 @@ async def create_wallet_features(data: pd.DataFrame) -> pd.DataFrame.groupby:
     return wallet_features
 
 
-async def scale_features(data) -> pd.DataFrame:
+async def scale_features(data: pd.DataFrame) -> pd.DataFrame:
     """
     Normalize values for ML
-    :param wallet features:
     :return scaled wallet features:
     """
     scaler = StandardScaler()
@@ -209,8 +208,6 @@ def optimal_k(wallet_features_scaled):
 async def fit_and_predict(wallet_features: pd.DataFrame, wallet_features_scaled: pd.DataFrame) -> pd.DataFrame:
     """
     Fit K-Means to number of clusters
-    :param non-scaled wallet features:
-    :param scaled wallet features:
     :return the non-scaled dataframe with a new column containing cluster number:
     """
     kmeans = KMeans(
