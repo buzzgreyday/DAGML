@@ -281,7 +281,6 @@ def visualize_clusters_scatterplot(wallet_features):
     plt.savefig('cluster_scatterplot.png')
 
 
-
 async def define_clusters(cutoff_transaction_count, cutoff_date):
     """
     Categorize node wallet sell/transaction behavior
