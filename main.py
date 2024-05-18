@@ -170,7 +170,7 @@ async def create_wallet_features(data: pd.DataFrame) -> pd.DataFrame.groupby:
     return wallet_features
 
 
-async def scale_features(data) -> StandardScaler:
+async def scale_features(data) -> pd.DataFrame:
     """
     Normalize values for ML
     :param wallet features:
@@ -204,6 +204,23 @@ def optimal_k(wallet_features_scaled):
     plt.savefig(f'elbow_plot.png')  # Got four clusters
 
 
+async def fit_and_predict(wallet_features: pd.DataFrame, wallet_features_scaled: pd.DataFrame) -> pd.DataFrame:
+    """
+    Fit K-Means to number of clusters
+    :param non-scaled wallet features:
+    :param scaled wallet features:
+    :return the non-scaled dataframe with a new column containing cluster number:
+    """
+    kmeans = KMeans(
+        n_clusters=4,
+        n_init=100,
+        max_iter=1000,
+        random_state=42
+    )
+    wallet_features['cluster'] = kmeans.fit_predict(wallet_features_scaled)
+    return wallet_features
+
+
 async def define_clusters(cutoff_transaction_count, cutoff_date):
     """
     Categorize node wallet sell/transaction behavior
@@ -220,15 +237,7 @@ async def define_clusters(cutoff_transaction_count, cutoff_date):
     wallet_features = await create_wallet_features(transactions)
     wallet_features_scaled = await scale_features(wallet_features)
     optimal_k(wallet_features_scaled)
-
-    # Fit K-Means to number of clusters
-    kmeans = KMeans(
-        n_clusters=4,
-        n_init=100,
-        max_iter=1000,
-        random_state=42
-    )
-    wallet_features['cluster'] = kmeans.fit_predict(wallet_features_scaled)
+    wallet_features = await fit_and_predict(wallet_features, wallet_features_scaled)
 
     # Analyse what clusters represent
     cluster_analysis = wallet_features.groupby('cluster').agg(
