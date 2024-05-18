@@ -232,7 +232,6 @@ async def generate_cluster_analysis(wallet_features: pd.DataFrame) -> pd.DataFra
         wallet_count=pd.NamedAgg(column='source', aggfunc='count'),
         transaction_frequency=pd.NamedAgg(column='transaction_frequency', aggfunc='mean')
     ).reset_index()
-    print(cluster_analysis)
     return cluster_analysis
 
 
@@ -304,8 +303,7 @@ async def define_clusters(cutoff_transaction_count, cutoff_date):
     visualize_clusters_scatterplot(wallet_features)
     visualize_clusters_barplot(cluster_analysis)
 
-
-    # Step 8: Determine which wallets are in which clusters
+    # Determine which wallets are in which clusters
     wallet_clusters = wallet_features[
         [
             'source',
