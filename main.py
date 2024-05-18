@@ -299,7 +299,7 @@ async def define_clusters(cutoff_transaction_count, cutoff_date):
 async def main():
     """Initiate processes"""
     # Specify the cutoff date
-    cutoff_date = pd.to_datetime('2022-05-17').tz_localize('UTC')
+    cutoff_date = pd.to_datetime('2022-12-31').tz_localize('UTC')
     cutoff_transaction_count = 8
     await define_clusters(cutoff_transaction_count, cutoff_date)
     exit(0)
