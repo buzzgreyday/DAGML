@@ -48,46 +48,73 @@ class Transactions:
         return results
 
 
-async def fetch_transaction(session, url) -> List:
+async def fetch(session, url):
     async with session.get(url) as response:
         if response.status == 200:
             transaction_data = await response.json()
-            return Transactions(transaction_data['data']).clean()
-        else:
-            print(f'Could not retrieve transactional data from {url}')
-            return []
+            return transaction_data['data']
+
+
+async def fetch_transaction(session, url) -> List:
+    transaction_data = await fetch(session, url)
+    if transaction_data:
+        return Transactions(transaction_data).clean()
+    else:
+        print(f'Could not retrieve transactional data from {url}')
+        return []
 
 
 async def fetch_addresses(session, url) -> List:
-    async with session.get(url) as response:
-        if response.status == 200:
-            data = await response.json()
-            return data['data']
-        else:
-            print(f'Could not retrieve transactional data from {url}')
-            return []
+    """
+    Returns a list of validator node addresses or an empty list if failed to get validator node addreses
+    :param session:
+    :param url:
+    :return validator node wallet addresses:
+    """
+    data = await fetch(session, url)
+    if data:
+        return data
+    else:
+        print(f'Could not retrieve address data from {url}')
+        return []
 
 
-async def get_addresses():
+async def get_addresses() -> List:
+    """
+    Request the current list of validators from API and return a list of validator node wallet addresses
+    :return validator node wallet addresses:
+    """
     async with ClientSession(connector=TCPConnector(ssl=False)) as session:
-        task = fetch_addresses(session, f'https://dyzt5u1o3ld0z.cloudfront.net/mainnet/validator-nodes')
-        data = await asyncio.gather(task)
+        task = fetch_addresses(
+            session,
+            f'https://dyzt5u1o3ld0z.cloudfront.net/mainnet/validator-nodes'
+        )
+        data = await task
         addresses = []
-        for d in data[0]:
+        for d in data:
             addresses.append(d['address'])
         return addresses
 
 
 async def request_transactions(addresses) -> Tuple[List[List]]:
+    """
+    Creates a list of lists containing transactional data for wallet addresses.
+    Each list in the list is a transaction.
+    :param addresses:
+    :return:
+    """
     async with ClientSession(connector=TCPConnector(ssl=False)) as session:
         tasks = [
-            fetch_transaction(session, f'https://be-mainnet.constellationnetwork.io/addresses/{address}/transactions/sent')
+            fetch_transaction(
+                session,
+                f'https://be-mainnet.constellationnetwork.io/addresses/{address}/transactions/sent'
+            )
             for address in addresses]
         transactions = await asyncio.gather(*tasks)
         return transactions
 
 
-async def create_dataframe(data: Tuple) -> pd.DataFrame:
+async def create_dataframe(data: Tuple[List[List]]) -> pd.DataFrame:
     """
     Takes the bulk of data from a transaction object (list of lists) and returns a dataframe
     :param data:
@@ -105,8 +132,10 @@ async def create_dataframe(data: Tuple) -> pd.DataFrame:
 
 async def destination_specific_calculations(data) -> pd.DataFrame:
     """
-    Calculate the sum sent to specific wallet addresses (destinations)
-    :param data:
+    Calculate the sum sent to specific wallet addresses (destinations) and count how many transactions has been sent
+    to specific wallets historically. This data can be used to filter out addresses with for example less than 5
+    transactions (if you're looking to identify an exchange wallet).
+    :param dataframe with added address specific data:
     :return:
     """
     data.loc[:, 'amount_sent_to_destination_sum'] = (
@@ -122,7 +151,7 @@ async def destination_specific_calculations(data) -> pd.DataFrame:
 
     # Merge the counts back to the original DataFrame
     data = pd.merge(data, count_transactions_to_destination,
-                    on=['source', 'destination', 'total_amount_sent_to_destination'], how='left')
+                    on=['source', 'destination', 'amount_sent_to_destination_sum'], how='left')
     return data
 
 
@@ -132,14 +161,14 @@ async def handle_outliers(data, cutoff_transaction_count, cutoff_date) -> pd.Dat
     :param data:
     :param cutoff_transaction_count:
     :param cutoff_date:
-    :return:
+    :return clean dataframe with no outliers:
     """
     # Ignore non-frequent destinations
     data = data[data['count'] >= cutoff_transaction_count]
     # Control timespan
     data = data[data['timestamp'] >= cutoff_date]
     # Exclude individual outliers
-    data = data[~(data['source'] == 'DAG2AhT8r7JoQb8fJNEKFLNEkaRSxjNmZ6Bbnqmb')]
+    # data = data[~(data['source'] == 'DAG2AhT8r7JoQb8fJNEKFLNEkaRSxjNmZ6Bbnqmb')]
     return data
 
 
