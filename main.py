@@ -121,16 +121,18 @@ async def main():
     pd.set_option('display.float_format', '{:.2f}'.format)
     # Specify the cutoff date
     cutoff_date = pd.to_datetime('2022-05-17').tz_localize('UTC')
-    cutoff_min_transaction_count = 5
+    cutoff_min_transaction_count = 8
     addresses = await request_addresses()
     transactions = await request_transactions(addresses)
     transactions = await create_dataframe(transactions)
     transactions.loc[:, 'total_amount_sent_to_destination'] = (
         transactions.groupby(['source', 'destination'])['amount'].transform('sum'))
     # Group by 'source', 'destination', and 'total_amount_sent_to_destination', count occurrences, and sort by count
+    # to get number of transactions to specific addresses
     transaction_count_to_destination = transactions.groupby(
-        ['source', 'destination', 'total_amount_sent_to_destination']).size().reset_index(name='count'
-                                                                                          ).sort_values(
+        ['source', 'destination', 'total_amount_sent_to_destination']).size().reset_index(
+        name='count'
+        ).sort_values(
         by='count'
     )
 
@@ -138,16 +140,19 @@ async def main():
     transactions = pd.merge(transactions, transaction_count_to_destination,
                             on=['source', 'destination', 'total_amount_sent_to_destination'], how='left')
 
-    # Handle Outliers
-
-    transactions = transactions[transactions['timestamp'] >= cutoff_date]
+    """ Handle radical outliers and clean """
+    # Ignore non-frequent destinations
     transactions = transactions[transactions['count'] >= cutoff_min_transaction_count]
+    # Control timespan
+    transactions = transactions[transactions['timestamp'] >= cutoff_date]
+    # Remove individual outliers
     transactions = transactions[~(transactions['source'] == 'DAG2AhT8r7JoQb8fJNEKFLNEkaRSxjNmZ6Bbnqmb')]
 
+
     wallet_features = transactions.groupby('source').agg(
-        total_amount_sent=pd.NamedAgg(column='total_amount_sent_to_destination', aggfunc='sum'),
-        number_of_transactions=pd.NamedAgg(column='total_amount_sent_to_destination', aggfunc='count'),
-        average_amount_sent=pd.NamedAgg(column='total_amount_sent_to_destination', aggfunc='mean'),
+        total_amount_sent=pd.NamedAgg(column='amount', aggfunc='sum'),
+        number_of_transactions=pd.NamedAgg(column='amount', aggfunc='count'),
+        average_amount_sent=pd.NamedAgg(column='amount', aggfunc='mean'),
         # Low transaction frequency means infrequent engagement or usage
         transaction_frequency=pd.NamedAgg(column='timestamp', aggfunc=lambda x: x.diff().mean().total_seconds())
     ).dropna().reset_index()
@@ -162,7 +167,12 @@ async def main():
     inertia = []
     K = range(1, 11)
     for k in K:
-        kmeans = KMeans(n_clusters=k, random_state=42)
+        kmeans = KMeans(
+            n_clusters=k,
+            n_init=100,
+            max_iter=1000,
+            random_state=42
+        )
         kmeans.fit(wallet_features_scaled)
         inertia.append(kmeans.inertia_)
 
@@ -173,7 +183,12 @@ async def main():
     plt.savefig(f'elbow_plot.png') # Got four clusters
 
     # Fit K-Means to number of clusters
-    kmeans = KMeans(n_clusters=4, random_state=42)
+    kmeans = KMeans(
+        n_clusters=4,
+        n_init=100,
+        max_iter=1000,
+        random_state=42
+    )
     wallet_features['cluster'] = kmeans.fit_predict(wallet_features_scaled)
 
     # Analyse what clusters represent
