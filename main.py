@@ -168,7 +168,7 @@ async def create_wallet_features(data: pd.DataFrame) -> pd.DataFrame.groupby:
         transaction_frequency=pd.NamedAgg(column='timestamp', aggfunc=lambda x: x.diff().mean().total_seconds())
     ).reset_index().copy()
     # Check for any NaN values in transaction_frequency and fill them with a suitable value, e.g., the mean or median
-    wallet_features['transaction_frequency'].fillna(0)
+    wallet_features['transaction_frequency'].fillna(0, inplace=True)
     return wallet_features
 
 
@@ -220,6 +220,21 @@ async def fit_and_predict(wallet_features: pd.DataFrame, wallet_features_scaled:
     return wallet_features
 
 
+async def label_clusters(data):
+    """
+    This function assigns labels based on cluster values
+    :param cluster analysis dataframe:
+    :return:
+    """
+    # lower frequency means more frequent transactions
+    # Average amount sent and transaction frequency is very co-related; some (0) have a high average amount,
+    # not very high transaction frequency (they doesn't sell often) but the same total amount sent as the
+    # less frequent senders (1).
+    # (2) A very small percentage sends very frequently and very little.
+    # (3) Most sell frequently and very little
+    pass
+
+
 async def generate_cluster_analysis(wallet_features: pd.DataFrame) -> pd.DataFrame:
     """
     Analyse what clusters represent
@@ -232,6 +247,8 @@ async def generate_cluster_analysis(wallet_features: pd.DataFrame) -> pd.DataFra
         wallet_count=pd.NamedAgg(column='source', aggfunc='count'),
         transaction_frequency=pd.NamedAgg(column='transaction_frequency', aggfunc='mean')
     ).reset_index()
+    # cluster_analysis = await label_clusters(cluster_analysis)
+    print(cluster_analysis)
     return cluster_analysis
 
 
@@ -313,12 +330,12 @@ async def define_clusters(cutoff_transaction_count, cutoff_date):
             'number_of_transactions'
         ]
     ]
-    print(wallet_clusters)
+    # print(wallet_clusters)
     # Example: List wallets in each cluster
-    for cluster in wallet_clusters['cluster'].unique():
-        print(f"\nWallets in Cluster {cluster}:")
-        print(wallet_clusters[wallet_clusters['cluster'] == cluster]['source'].values)
-    print(wallet_clusters[(wallet_clusters.source == 'DAG3nt2qnhdeGS5ZxredSxqaZrn9KoL6xHZ3yTc5')])
+    # for cluster in wallet_clusters['cluster'].unique():
+    #     print(f"\nWallets in Cluster {cluster}:")
+    #     print(wallet_clusters[wallet_clusters['cluster'] == cluster]['source'].values)
+    # print(wallet_clusters[(wallet_clusters.source == 'DAG3nt2qnhdeGS5ZxredSxqaZrn9KoL6xHZ3yTc5')])
 
 
 async def main():
