@@ -17,17 +17,28 @@ class Transactions:
     def __init__(self, transactions):
         self.transactions = transactions
 
-    def clean(self):
+    def clean_merge(self, data: List[List]):
+        """
+        0(n2) time
+        :param data:
+        :return:
+        """
         results = []
         for transaction in self.transactions:
-            results.append(
-                [
-                    str(transaction['source']),
-                    str(transaction['destination']),
-                    int(transaction['amount']) / 100000000,
-                    str(transaction['timestamp'])
-                ]
-            )
+            for d in data:
+                if d[0] == transaction['source']:
+                    results.append(
+                        [
+                            str(transaction['source']),
+                            str(transaction['destination']),
+                            int(transaction['amount']) / 100000000,
+                            str(transaction['timestamp']),
+                            str(d[1]),
+                            str(d[2]),
+                            str(d[3])
+                        ]
+                    )
+                    break
         return results
 
 
@@ -45,10 +56,10 @@ async def fetch(type: str, session, url):
                 raise TypeError(f'"{type.title() if type is not None else "None"}" is not a valid parameter')
 
 
-async def fetch_transaction(session, url) -> List:
+async def fetch_node_transaction(data, session, url) -> List:
     transaction_data = await fetch('transaction', session, url)
     if transaction_data:
-        return Transactions(transaction_data).clean()
+        return Transactions(transaction_data).clean_merge(data)
     else:
         print(f'Could not retrieve transactional data from {url}')
         return []
@@ -86,21 +97,23 @@ async def get_addresses() -> List:
         return nodes
 
 
-async def request_transactions(data) -> Tuple[List[List]]:
+async def request_transactions(data: List[List]) -> Tuple[List[List]]:
     """
     Creates a list of lists containing transactional data for wallet addresses.
     Each list in the list is a transaction.
-    :param data: list of nodes ([address, ip])
+    :param data: list of nodes [[address, ip, ...], ...]
     :return:
     """
     async with ClientSession(connector=TCPConnector(ssl=False)) as session:
         tasks = [
-            fetch_transaction(
+            fetch_node_transaction(
+                data,
                 session,
                 f'https://be-mainnet.constellationnetwork.io/addresses/{d[0]}/transactions/sent'
             )
             for d in data]
         transactions = await asyncio.gather(*tasks)
+        print(transactions)
         return transactions
 
 
@@ -112,7 +125,7 @@ async def create_dataframe(data: Tuple[List[List]]) -> pd.DataFrame:
     """
     list_of_data = []
     for row in data:
-        data = pd.DataFrame(row, columns=['source', 'destination', 'amount', 'timestamp'])
+        data = pd.DataFrame(row, columns=['source', 'destination', 'amount', 'timestamp', 'ip', 'country', 'isp'])
         data = data.sort_values(by=['timestamp', 'source'])
         if not data.empty:
             list_of_data.append(data)
@@ -323,21 +336,13 @@ async def get_location(data: List[List]):
         return data
 
 
-async def define_clusters(cutoff_transaction_count, cutoff_date):
+async def define_clusters(data):
     """
     Categorize node wallet sell/transaction behavior
-    :param cutoff_transaction_count:
-    :param cutoff_date:
+    :param data:
     :return:
     """
-    pd.set_option('display.float_format', '{:.2f}'.format)
-    nodes = await get_addresses()
-    nodes = await get_location(nodes)
-    transactions = await request_transactions(nodes)
-    transactions = await create_dataframe(transactions)
-    transactions = await destination_specific_calculations(transactions)
-    transactions = await handle_outliers(transactions, cutoff_transaction_count, cutoff_date)
-    wallet_features = await create_wallet_features(transactions)
+    wallet_features = await create_wallet_features(data)
     wallet_features_scaled = await scale_features(wallet_features)
     optimal_k(wallet_features_scaled)
     wallet_features = await fit_and_predict(wallet_features, wallet_features_scaled)
@@ -362,6 +367,25 @@ async def define_clusters(cutoff_transaction_count, cutoff_date):
         print(f"\nWallets in Cluster {cluster}:")
         print(wallet_clusters[wallet_clusters['cluster'] == cluster]["source"].values)
     print(wallet_clusters[(wallet_clusters.source == 'DAG3nt2qnhdeGS5ZxredSxqaZrn9KoL6xHZ3yTc5')])
+    return wallet_clusters, cluster_analysis
+
+
+async def collect_data(cutoff_transaction_count, cutoff_date):
+    """
+    Collect all the data needed to do the ML.
+    We need to also collect price data and calculate fluctuation before transactions
+    :param cutoff_transaction_count:
+    :param cutoff_date:
+    :return:
+    """
+    pd.set_option('display.float_format', '{:.2f}'.format)
+    nodes = await get_addresses()
+    nodes = await get_location(nodes)
+    transactions = await request_transactions(nodes)
+    transactions = await create_dataframe(transactions)
+    transactions = await destination_specific_calculations(transactions)
+    transactions_no_outliers = await handle_outliers(transactions, cutoff_transaction_count, cutoff_date)
+    return transactions_no_outliers
 
 
 async def main():
@@ -369,7 +393,8 @@ async def main():
     # Specify the cutoff date
     cutoff_date = pd.to_datetime('2022-12-31').tz_localize('UTC')
     cutoff_transaction_count = 8
-    await define_clusters(cutoff_transaction_count, cutoff_date)
+    transactions_no_outliers = await collect_data(cutoff_transaction_count, cutoff_date)
+    wallet_clusters, cluster_analysis = await define_clusters(transactions_no_outliers)
     exit(0)
 
 
