@@ -1,4 +1,6 @@
 import asyncio
+import os
+
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
@@ -29,15 +31,22 @@ class Transactions:
         return results
 
 
-async def fetch(session, url):
+async def fetch(type: str, session, url):
     async with session.get(url) as response:
         if response.status == 200:
-            transaction_data = await response.json()
-            return transaction_data['data']
+            data = await response.json()
+            if type.lower() in ('t', 'trans', 'transact', 'transaction', 'a', 'addr', 'address'):
+                return data['data']
+            elif type.lower() in ('l', 'loc', 'location', 'local', 'gl', 'geo', 'geoloc', 'geolocal', 'geolocation'):
+                country = data['country']['iso_code']
+                provider = data['traits']['isp']
+                return country, provider
+            else:
+                raise TypeError(f'"{type.title() if type is not None else "None"}" is not a valid parameter')
 
 
 async def fetch_transaction(session, url) -> List:
-    transaction_data = await fetch(session, url)
+    transaction_data = await fetch('transaction', session, url)
     if transaction_data:
         return Transactions(transaction_data).clean()
     else:
@@ -50,9 +59,9 @@ async def fetch_addresses(session, url) -> List:
     Returns a list of validator node addresses or an empty list if failed to get validator node addreses
     :param session:
     :param url:
-    :return validator node wallet addresses:
+    :return list: validator node wallet addresses
     """
-    data = await fetch(session, url)
+    data = await fetch('address', session, url)
     if data:
         return data
     else:
@@ -63,7 +72,7 @@ async def fetch_addresses(session, url) -> List:
 async def get_addresses() -> List:
     """
     Request the current list of validators from API and return a list of validator node wallet addresses
-    :return validator node wallet addresses:
+    :return list: validator node wallet addresses
     """
     async with ClientSession(connector=TCPConnector(ssl=False)) as session:
         task = fetch_addresses(
@@ -71,26 +80,26 @@ async def get_addresses() -> List:
             f'https://dyzt5u1o3ld0z.cloudfront.net/mainnet/validator-nodes'
         )
         data = await task
-        addresses = []
-        for d in data:
-            addresses.append(d['address'])
-        return addresses
+        nodes = []
+        for node in data:
+            nodes.append([node['address'], node['ip']])
+        return nodes
 
 
-async def request_transactions(addresses) -> Tuple[List[List]]:
+async def request_transactions(data) -> Tuple[List[List]]:
     """
     Creates a list of lists containing transactional data for wallet addresses.
     Each list in the list is a transaction.
-    :param addresses:
+    :param data: list of nodes ([address, ip])
     :return:
     """
     async with ClientSession(connector=TCPConnector(ssl=False)) as session:
         tasks = [
             fetch_transaction(
                 session,
-                f'https://be-mainnet.constellationnetwork.io/addresses/{address}/transactions/sent'
+                f'https://be-mainnet.constellationnetwork.io/addresses/{d[0]}/transactions/sent'
             )
-            for address in addresses]
+            for d in data]
         transactions = await asyncio.gather(*tasks)
         return transactions
 
@@ -98,7 +107,7 @@ async def request_transactions(addresses) -> Tuple[List[List]]:
 async def create_dataframe(data: Tuple[List[List]]) -> pd.DataFrame:
     """
     Takes the bulk of data from a transaction object (list of lists) and returns a dataframe
-    :param data:
+    :param data: list of lists
     :return:
     """
     list_of_data = []
@@ -117,8 +126,8 @@ async def destination_specific_calculations(data) -> pd.DataFrame:
     Calculate the sum sent to specific wallet addresses (destinations) and count how many transactions has been sent
     to specific wallets historically. This data can be used to filter out addresses with for example less than 5
     transactions (if you're looking to identify an exchange wallet).
-    :param dataframe with added address specific data:
-    :return:
+    :param data: dataframe with added address specific data
+    :return pd.DataFrame:
     """
     data.loc[:, 'amount_sent_to_destination_sum'] = (
         data.groupby(['source', 'destination'])['amount'].transform('sum'))
@@ -143,7 +152,7 @@ async def handle_outliers(data, cutoff_transaction_count, cutoff_date) -> pd.Dat
     :param data:
     :param cutoff_transaction_count:
     :param cutoff_date:
-    :return clean dataframe with no outliers:
+    :return pd.DataFrame: clean dataframe with no outliers
     """
     # Ignore non-frequent destinations
     data = data[data['count'] >= cutoff_transaction_count]
@@ -157,8 +166,8 @@ async def handle_outliers(data, cutoff_transaction_count, cutoff_date) -> pd.Dat
 async def create_wallet_features(data: pd.DataFrame) -> pd.DataFrame.groupby:
     """
     Self-explanatory
-    :param transactional data:
-    :return features for ML:
+    :param data: transactional data
+    :return pd.DataFrame: grouped features for ML
     """
     wallet_features = data.groupby('source').agg(
         total_amount_sent=pd.NamedAgg(column='amount', aggfunc='sum'),
@@ -298,6 +307,22 @@ def visualize_clusters_scatterplot(wallet_features):
     plt.savefig('cluster_scatterplot.png')
 
 
+async def get_location(data: List[List]):
+    """
+    Function to get IP geolocation
+    :param data: [[Addr, IP], ...]
+    :return:
+    """
+    from dotenv import load_dotenv
+    load_dotenv()
+    async with ClientSession(connector=TCPConnector(ssl=False)) as session:
+        for d in data:
+            url = f'https://api.findip.net/{d[1]}/?token={os.getenv('GLOC_TOKEN')}'
+            d.extend(await fetch('location', session, url))
+            print(d)
+        return data
+
+
 async def define_clusters(cutoff_transaction_count, cutoff_date):
     """
     Categorize node wallet sell/transaction behavior
@@ -306,8 +331,9 @@ async def define_clusters(cutoff_transaction_count, cutoff_date):
     :return:
     """
     pd.set_option('display.float_format', '{:.2f}'.format)
-    addresses = await get_addresses()
-    transactions = await request_transactions(addresses)
+    nodes = await get_addresses()
+    nodes = await get_location(nodes)
+    transactions = await request_transactions(nodes)
     transactions = await create_dataframe(transactions)
     transactions = await destination_specific_calculations(transactions)
     transactions = await handle_outliers(transactions, cutoff_transaction_count, cutoff_date)
@@ -332,10 +358,10 @@ async def define_clusters(cutoff_transaction_count, cutoff_date):
     ]
     # print(wallet_clusters)
     # Example: List wallets in each cluster
-    # for cluster in wallet_clusters['cluster'].unique():
-    #     print(f"\nWallets in Cluster {cluster}:")
-    #     print(wallet_clusters[wallet_clusters['cluster'] == cluster]['source'].values)
-    # print(wallet_clusters[(wallet_clusters.source == 'DAG3nt2qnhdeGS5ZxredSxqaZrn9KoL6xHZ3yTc5')])
+    for cluster in wallet_clusters['cluster'].unique():
+        print(f"\nWallets in Cluster {cluster}:")
+        print(wallet_clusters[wallet_clusters['cluster'] == cluster]["source"].values)
+    print(wallet_clusters[(wallet_clusters.source == 'DAG3nt2qnhdeGS5ZxredSxqaZrn9KoL6xHZ3yTc5')])
 
 
 async def main():
