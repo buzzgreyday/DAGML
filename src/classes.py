@@ -1,3 +1,6 @@
+from typing import List
+
+
 class Transactions:
 
     def __init__(self, transactions):

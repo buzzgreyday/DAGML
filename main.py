@@ -6,7 +6,9 @@ import pandas as pd
 from aiohttp import ClientSession, TCPConnector
 from typing import List, Tuple
 from sklearn.preprocessing import StandardScaler
+from scipy.stats import mode
 from src import fetch, clustering
+from src.visualization import visualize_clusters_scatterplot, visualize_clusters_barplot
 
 
 async def get_addresses() -> List:
@@ -176,7 +178,7 @@ async def get_location(data: List[List]):
     async with ClientSession(connector=TCPConnector(ssl=False)) as session:
         for d in data:
             url = f'https://api.findip.net/{d[1]}/?token={os.getenv('GLOC_TOKEN')}'
-            d.extend(await fetch('location', session, url))
+            d.extend(await fetch.fetch('location', session, url))
             print(d)
         return data
 
@@ -206,12 +208,7 @@ async def define_clusters(data):
             'number_of_transactions'
         ]
     ]
-    # print(wallet_clusters)
-    # Example: List wallets in each cluster
-    for cluster in wallet_clusters['cluster'].unique():
-        print(f"\nWallets in Cluster {cluster}:")
-        print(wallet_clusters[wallet_clusters['cluster'] == cluster]["source"].values)
-    print(wallet_clusters[(wallet_clusters.source == 'DAG3nt2qnhdeGS5ZxredSxqaZrn9KoL6xHZ3yTc5')])
+
     return wallet_clusters, cluster_analysis
 
 
@@ -235,11 +232,43 @@ async def collect_data(cutoff_transaction_count, cutoff_date):
 
 async def main():
     """Initiate processes"""
+
+    def print_most_frequent_value(df, target_column):
+        if not df.empty:
+            most_frequent_value = df[target_column].mode()[0]
+            print(f"Most frequent value in '{target_column}' is {most_frequent_value}")
+        else:
+            print("The DataFrame is empty.")
     # Specify the cutoff date
     cutoff_date = pd.to_datetime('2022-12-31').tz_localize('UTC')
     cutoff_transaction_count = 8
     transactions_no_outliers = await collect_data(cutoff_transaction_count, cutoff_date)
     wallet_clusters, cluster_analysis = await define_clusters(transactions_no_outliers)
+    # print(wallet_clusters)
+    # Example: List wallets in each cluster
+    cluster_addresses = []
+    for cluster in wallet_clusters['cluster'].unique():
+        addresses = wallet_clusters[wallet_clusters['cluster'] == cluster]["source"].values
+        cluster_addresses.append(addresses)
+
+    # Filter DataFrames based on the lists of wallet addresses
+    cluster0 = transactions_no_outliers[transactions_no_outliers['source'].isin(cluster_addresses[0])]
+    cluster1 = transactions_no_outliers[transactions_no_outliers['source'].isin(cluster_addresses[1])]
+    cluster2 = transactions_no_outliers[transactions_no_outliers['source'].isin(cluster_addresses[2])]
+    cluster3 = transactions_no_outliers[transactions_no_outliers['source'].isin(cluster_addresses[3])]
+
+    # Apply the function to each filtered DataFrame
+    print("For DataFrame 1:")
+    print_most_frequent_value(cluster0, 'country')
+
+    print("For DataFrame 2:")
+    print_most_frequent_value(cluster1, 'country')
+
+    print("For DataFrame 3:")
+    print_most_frequent_value(cluster2, 'country')
+
+    print("For DataFrame 4:")
+    print_most_frequent_value(cluster3, 'country')
     exit(0)
 
 
