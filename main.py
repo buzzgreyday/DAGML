@@ -2,82 +2,11 @@ import asyncio
 import os
 
 import pandas as pd
-import seaborn as sns
-import matplotlib.pyplot as plt
 
-from sklearn.cluster import KMeans
 from aiohttp import ClientSession, TCPConnector
 from typing import List, Tuple
-from matplotlib.ticker import FuncFormatter
 from sklearn.preprocessing import StandardScaler
-
-
-class Transactions:
-
-    def __init__(self, transactions):
-        self.transactions = transactions
-
-    def clean_merge(self, data: List[List]):
-        """
-        0(n2) time
-        :param data:
-        :return:
-        """
-        results = []
-        for transaction in self.transactions:
-            for d in data:
-                if d[0] == transaction['source']:
-                    results.append(
-                        [
-                            str(transaction['source']),
-                            str(transaction['destination']),
-                            int(transaction['amount']) / 100000000,
-                            str(transaction['timestamp']),
-                            str(d[1]),
-                            str(d[2]),
-                            str(d[3])
-                        ]
-                    )
-                    break
-        return results
-
-
-async def fetch(type: str, session, url):
-    async with session.get(url) as response:
-        if response.status == 200:
-            data = await response.json()
-            if type.lower() in ('t', 'trans', 'transact', 'transaction', 'a', 'addr', 'address'):
-                return data['data']
-            elif type.lower() in ('l', 'loc', 'location', 'local', 'gl', 'geo', 'geoloc', 'geolocal', 'geolocation'):
-                country = data['country']['iso_code']
-                provider = data['traits']['isp']
-                return country, provider
-            else:
-                raise TypeError(f'"{type.title() if type is not None else "None"}" is not a valid parameter')
-
-
-async def fetch_node_transaction(data, session, url) -> List:
-    transaction_data = await fetch('transaction', session, url)
-    if transaction_data:
-        return Transactions(transaction_data).clean_merge(data)
-    else:
-        print(f'Could not retrieve transactional data from {url}')
-        return []
-
-
-async def fetch_addresses(session, url) -> List:
-    """
-    Returns a list of validator node addresses or an empty list if failed to get validator node addreses
-    :param session:
-    :param url:
-    :return list: validator node wallet addresses
-    """
-    data = await fetch('address', session, url)
-    if data:
-        return data
-    else:
-        print(f'Could not retrieve address data from {url}')
-        return []
+from src import fetch, clustering
 
 
 async def get_addresses() -> List:
@@ -86,7 +15,7 @@ async def get_addresses() -> List:
     :return list: validator node wallet addresses
     """
     async with ClientSession(connector=TCPConnector(ssl=False)) as session:
-        task = fetch_addresses(
+        task = fetch.addresses(
             session,
             f'https://dyzt5u1o3ld0z.cloudfront.net/mainnet/validator-nodes'
         )
@@ -97,7 +26,7 @@ async def get_addresses() -> List:
         return nodes
 
 
-async def request_transactions(data: List[List]) -> Tuple[List[List]]:
+async def get_transactions(data: List[List]) -> Tuple[List[List]]:
     """
     Creates a list of lists containing transactional data for wallet addresses.
     Each list in the list is a transaction.
@@ -106,7 +35,7 @@ async def request_transactions(data: List[List]) -> Tuple[List[List]]:
     """
     async with ClientSession(connector=TCPConnector(ssl=False)) as session:
         tasks = [
-            fetch_node_transaction(
+            fetch.transaction(
                 data,
                 session,
                 f'https://be-mainnet.constellationnetwork.io/addresses/{d[0]}/transactions/sent'
@@ -204,44 +133,6 @@ async def scale_features(data: pd.DataFrame) -> pd.DataFrame:
     return wallet_features_scaled
 
 
-def optimal_k(wallet_features_scaled):
-    """
-    Saves elbow plot to aid determine optimal number of clusters
-    """
-    inertia = []
-    K = range(1, 11)
-    for k in K:
-        kmeans = KMeans(
-            n_clusters=k,
-            n_init=100,
-            max_iter=1000,
-            random_state=42
-        )
-        kmeans.fit(wallet_features_scaled)
-        inertia.append(kmeans.inertia_)
-
-    plt.figure(figsize=(20, 12))
-    plt.plot(K, inertia, 'bx-')
-    plt.xlabel('Number of Clusters')
-    plt.ylabel('Elbow Method for Optimal k')
-    plt.savefig(f'elbow_plot.png')  # Got four clusters
-
-
-async def fit_and_predict(wallet_features: pd.DataFrame, wallet_features_scaled: pd.DataFrame) -> pd.DataFrame:
-    """
-    Fit K-Means to number of clusters
-    :return the non-scaled dataframe with a new column containing cluster number:
-    """
-    kmeans = KMeans(
-        n_clusters=4,
-        n_init=100,
-        max_iter=1000,
-        random_state=42
-    )
-    wallet_features['cluster'] = kmeans.fit_predict(wallet_features_scaled)
-    return wallet_features
-
-
 async def label_clusters(data):
     """
     This function assigns labels based on cluster values
@@ -274,52 +165,6 @@ async def generate_cluster_analysis(wallet_features: pd.DataFrame) -> pd.DataFra
     return cluster_analysis
 
 
-def visualize_clusters_barplot(cluster_analysis):
-    # Visualization: Bar plot of total tokens sent by cluster
-    plt.figure(figsize=(10, 6))
-    sns.barplot(
-        x='cluster',
-        y='average_amount_sent',
-        data=cluster_analysis,
-        legend=False
-    )
-    plt.title('Total amount Sent by Cluster')
-    plt.xlabel('Cluster')
-    plt.ylabel('Average Amount Sent')
-    plt.savefig('cluster_bar_plot.png')
-
-
-def visualize_clusters_scatterplot(wallet_features):
-    """
-    Visualize clusters in a scatterplot
-    :param wallet_features:
-    :return:
-    """
-    def currency_formatter(x, pos):
-        return '{:,.2f}'.format(x)
-
-    # Visualization: Scatter plot of clusters
-    plt.figure(figsize=(10, 6))
-    sns.scatterplot(
-        x='total_amount_sent',
-        y='average_amount_sent',
-        hue='cluster',
-        size='transaction_frequency',
-        palette='viridis',
-        data=wallet_features,
-        s=100,
-        alpha=0.6
-    )
-    plt.title('Cluster Visualization Based on Total Tokens Sent and Average Transaction Value')
-    plt.xlabel('Total Amount Sent')
-    plt.ylabel('Average Amount Sent')
-    # Applying custom formatter
-    plt.gca().xaxis.set_major_formatter(FuncFormatter(currency_formatter))
-    plt.gca().yaxis.set_major_formatter(FuncFormatter(currency_formatter))
-    plt.legend(title='Cluster')
-    plt.savefig('cluster_scatterplot.png')
-
-
 async def get_location(data: List[List]):
     """
     Function to get IP geolocation
@@ -344,8 +189,8 @@ async def define_clusters(data):
     """
     wallet_features = await create_wallet_features(data)
     wallet_features_scaled = await scale_features(wallet_features)
-    optimal_k(wallet_features_scaled)
-    wallet_features = await fit_and_predict(wallet_features, wallet_features_scaled)
+    clustering.optimal_k(wallet_features_scaled)
+    wallet_features = await clustering.fit_and_predict(wallet_features, wallet_features_scaled)
     cluster_analysis = await generate_cluster_analysis(wallet_features)
     visualize_clusters_scatterplot(wallet_features)
     visualize_clusters_barplot(cluster_analysis)
@@ -381,7 +226,7 @@ async def collect_data(cutoff_transaction_count, cutoff_date):
     pd.set_option('display.float_format', '{:.2f}'.format)
     nodes = await get_addresses()
     nodes = await get_location(nodes)
-    transactions = await request_transactions(nodes)
+    transactions = await get_transactions(nodes)
     transactions = await create_dataframe(transactions)
     transactions = await destination_specific_calculations(transactions)
     transactions_no_outliers = await handle_outliers(transactions, cutoff_transaction_count, cutoff_date)
